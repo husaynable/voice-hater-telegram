@@ -23,9 +23,6 @@ async function main() {
   client.on('update', async (update) => {
     if (update._ === 'updateNewMessage') {
       const message = update.message;
-      if (message.content._ === 'messageText') {
-        console.log(message.content.text.entities);
-      }
 
       await handleNewMessage(message, me);
     }
@@ -71,6 +68,7 @@ async function removeMessageAndSendWarning(
       _: 'deleteMessages',
       chat_id: message.chat_id,
       message_ids: [message.id],
+      revoke: true,
     });
   }
 
@@ -124,23 +122,33 @@ function isVoiceMessageReplyToMe(sender: MessageSender, myId: number): boolean {
 
 function getMessageText(mentionName?: string): string {
   return `${mentionName ? '@' + mentionName + ', ' : ''}${
-    process.env.MESSAGE ?? 'не делай так больше...'
+    process.env.MESSAGE ?? 'этот пользователь отключил возможность отправки ему голосовых сообщений.'
   }`;
 }
 
 function getMessageEntities(
   mentionUsername?: string
 ): ReadonlyArray<textEntity$Input> {
-  return mentionUsername
-    ? [
-        {
-          _: 'textEntity',
-          type: { _: 'textEntityTypeMention' },
-          offset: 0,
-          length: mentionUsername.length + 1,
-        },
-      ]
-    : undefined;
+  const entities: textEntity$Input[] = [
+    {
+      _: 'textEntity',
+      type: { _: 'textEntityTypeItalic' },
+      offset: mentionUsername ? mentionUsername.length + 3 : 0,
+      length: 72,
+    }
+  ];
+
+  if (mentionUsername) {
+    entities.push(
+      {
+        _: 'textEntity',
+        type: { _: 'textEntityTypeMention' },
+        offset: 0,
+        length: mentionUsername.length + 1,
+      },
+    )
+  }
+  return entities;
 }
 
 function getUserInfo(userId: number): Promise<user> {
