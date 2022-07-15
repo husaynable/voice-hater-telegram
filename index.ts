@@ -1,5 +1,12 @@
 import { Client } from 'tdl';
 import { TDLib } from 'tdl-tdlib-addon';
+import {
+  message,
+  chat,
+  MessageSender,
+  user,
+  textEntity$Input,
+} from 'tdlib-types';
 require('dotenv').config();
 
 const client = new Client(new TDLib(), {
@@ -9,41 +16,44 @@ const client = new Client(new TDLib(), {
 
 client.on('error', console.error);
 
-async function main () {
-  await client.connectAndLogin()
+async function main() {
+  await client.connectAndLogin();
   const me = await client.invoke({ _: 'getMe' });
+
   client.on('update', async (update) => {
     if (update._ === 'updateNewMessage') {
-      console.log(update.message);
-
-      if (update.message.content._ === 'messageVoiceNote' && update.message.sender_id._ === 'messageSenderUser'){
-        const chat = await client.invoke({
-          _: 'getChat',
-          chat_id: update.message.chat_id
-        });
-
-        if (chat.type._ === 'chatTypePrivate') {
-          await removeMessageAndSendWarning(update.message.chat_id, update.message.id, update.message.can_be_deleted_for_all_users);
-          return;
-        }
-
-        if (update.message.reply_to_message_id) {
-          const repliedMessage = await client.invoke({
-            _: 'getMessage',
-            message_id: update.message.reply_to_message_id,
-            chat_id: update.message.reply_in_chat_id
-          });
-          if (repliedMessage.sender_id._ === 'messageSenderUser' && repliedMessage.sender_id.user_id === me.id) {
-            await removeMessageAndSendWarning(update.message.chat_id, update.message.id, update.message.can_be_deleted_for_all_users);
-            return;
-          }
-        }
+      const message = update.message;
+      if (message.content._ === 'messageText') {
+        console.log(message.content.text.entities);
       }
+
+      await handleNewMessage(message, me);
     }
   });
 }
 
 main();
+
+async function handleNewMessage(message: message, me: user): Promise<void> {
+  if (isVoiceMessageFromUser(message)) {
+    const chat = await getChat(message.chat_id);
+
+    if (isPrivateChat(chat)) {
+      await removeMessageAndSendWarning(message);
+    } else if (message.reply_to_message_id) {
+      const repliedMessage = await getRepliedMessage(
+        message.reply_to_message_id,
+        message.reply_in_chat_id
+      );
+
+      if (isVoiceMessageReplyToMe(repliedMessage.sender_id, me.id)) {
+        // @ts-ignore
+        const user = await getUserInfo(message.sender_id.user_id)
+        await removeMessageAndSendWarning(message, user.username);
+      }
+    }
+  }
+}
 
 async function wait(ms?: number): Promise<void> {
   return new Promise((res) => {
@@ -51,26 +61,91 @@ async function wait(ms?: number): Promise<void> {
   });
 }
 
-async function removeMessageAndSendWarning(chat_id: number, message_id: number, canRemoveMessage: boolean): Promise<void> {
-  if (canRemoveMessage) {
+async function removeMessageAndSendWarning(
+  message: message,
+  mentionUsername?: string
+): Promise<void> {
+  if (message.can_be_deleted_for_all_users) {
     await wait(1000);
     await client.invoke({
       _: 'deleteMessages',
-      chat_id: chat_id,
-      message_ids: [message_id],
+      chat_id: message.chat_id,
+      message_ids: [message.id],
     });
   }
 
   await wait();
   await client.invoke({
     _: 'sendMessage',
-    chat_id: chat_id,
+    chat_id: message.chat_id,
     input_message_content: {
       _: 'inputMessageText',
       text: {
         _: 'formattedText',
-        text: 'не делай так больше...'
-      }
-    }
+        text: getMessageText(mentionUsername),
+        entities: getMessageEntities(mentionUsername),
+      },
+    },
+  });
+}
+
+function isVoiceMessageFromUser(message: message): boolean {
+  return (
+    message.content._ === 'messageVoiceNote' &&
+    message.sender_id._ === 'messageSenderUser'
+  );
+}
+
+function getChat(chatId: number): Promise<chat> {
+  return client.invoke({
+    _: 'getChat',
+    chat_id: chatId,
+  });
+}
+
+function isPrivateChat(chat: chat): boolean {
+  return chat.type._ === 'chatTypePrivate';
+}
+
+function getRepliedMessage(
+  messageId: number,
+  chatId: number
+): Promise<message> {
+  return client.invoke({
+    _: 'getMessage',
+    message_id: messageId,
+    chat_id: chatId,
+  });
+}
+
+function isVoiceMessageReplyToMe(sender: MessageSender, myId: number): boolean {
+  return sender._ === 'messageSenderUser' && sender.user_id === myId;
+}
+
+function getMessageText(mentionName?: string): string {
+  return `${mentionName ? '@' + mentionName + ', ' : ''}${
+    process.env.MESSAGE ?? 'не делай так больше...'
+  }`;
+}
+
+function getMessageEntities(
+  mentionUsername?: string
+): ReadonlyArray<textEntity$Input> {
+  return mentionUsername
+    ? [
+        {
+          _: 'textEntity',
+          type: { _: 'textEntityTypeMention' },
+          offset: 0,
+          length: mentionUsername.length + 1,
+        },
+      ]
+    : undefined;
+}
+
+function getUserInfo(userId: number): Promise<user> {
+  return client.invoke({
+    _: 'getUser',
+    user_id: userId,
   });
 }
